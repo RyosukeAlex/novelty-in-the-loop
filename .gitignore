@@ -26,3 +26,6 @@ venv/
 # OS / エディタ
 .DS_Store
 .vscode/
+
+# 論文 PDF（コミットしない）
+*.pdf
