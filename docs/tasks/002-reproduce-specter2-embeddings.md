@@ -24,6 +24,81 @@
 | ID | OpenAlex の Work ID（`W...`）。BigQuery の `paperid` と同じ形式 |
 | メタデータ | なし（モデル名・アダプタ・入力形式の記載は見つかっていない） |
 
+## ✅ 結論（2026-10-25）
+
+**再現できる。設定は次の通り。**
+
+```python
+from transformers import AutoTokenizer
+from adapters import AutoAdapterModel
+
+tok = AutoTokenizer.from_pretrained("allenai/specter2_base")
+model = AutoAdapterModel.from_pretrained("allenai/specter2_base")
+model.load_adapter("allenai/specter2", source="hf", load_as="proximity", set_active=True)
+model.eval()
+
+text = title + tok.sep_token + abstract          # 要旨が無ければ title だけ
+batch = tok([text], padding=True, truncation=True, return_tensors="pt", max_length=512)
+vec = model(**batch).last_hidden_state[:, 0, :]  # CLS トークン
+```
+
+| 項目 | 確定した値 |
+|---|---|
+| モデル | `allenai/specter2_base` |
+| アダプタ | **`allenai/specter2`（proximity）** ← README の未決事項の答え |
+| 入力形式 | `title` + `[SEP]` + `abstract` |
+| 文書ベクトル | 最終隠れ状態の **CLS トークン**（先頭） |
+| 正規化 | しない（SciSciNet も未正規化） |
+
+### 検証結果
+
+| paperid | cos(SciSciNet, 自前) | 参照ノルム | 自前ノルム |
+|---|---:|---:|---:|
+| W583078353 | **0.996788** | 21.729 | 21.748 |
+| W584426783 | **0.998718** | 21.884 | 21.885 |
+| W574406607（中国語・要旨4語） | 0.998689 | 21.525 | 21.510 |
+
+残差 0.3% 程度の原因候補：OpenAlex の現在の要旨が SciSciNet 作成時点と異なる、
+`transformers` / `tokenizers` のバージョン差。実用上は同一空間として扱える。
+
+### 注意：警告メッセージは誤解を招く
+
+`load_adapter(..., set_active=True)` を使っても
+`There are adapters available but none are activated for the forward pass.`
+という警告が出るが、**アダプタは有効になっている**。
+素の `AutoModel.from_pretrained("allenai/specter2_base")` と出力を比べると異なるため確認できる。
+`set_active_adapters("proximity")` を追加で呼んでも出力は変わらない（不要）。
+
+### 本検証（2026-10-25、ML 論文 18,698 本）— **完了**
+
+GCS 走査で ML 2016–2018 の埋め込みが揃ったので、ローカル計算分と全件突き合わせた。
+
+| min | p1 | p5 | p25 | p50 | p75 | p95 | max | 平均 |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0.8164 | 0.9649 | 0.9964 | 0.9986 | **0.9989** | 0.9991 | 0.9993 | 0.9996 | **0.997859** |
+
+| 条件 | 割合 |
+|---|---:|
+| cos >= 0.99 | **97.46%** |
+| cos >= 0.95 | 99.55% |
+| cos >= 0.90 | 99.96% |
+
+> **結論：SciSciNet の埋め込みと自前計算は同一空間として扱える。**
+> 2025 年以降の論文（SciSciNet に無い）を自前で埋め込み、SciSciNet 分と混在させても
+> 実在しない「動き」は生まれない。**本タスクの目的は達成された。**
+
+下位 1%（cos < 0.965）の原因候補：OpenAlex の要旨が SciSciNet 作成時点から
+改訂された論文。必要になったら個別に調べる。
+
+### 残っている確認
+
+- 手順 2〜5（設定の網羅的比較）は未実施。上記の一致で十分なため省略した。
+  設定を変える必要が生じたら戻る。
+- 手順 2〜5（OpenAlex からの取得・設定の網羅的比較・一致度の分布）は未実施。
+  上記 1 本〜数本で十分な一致が出たため省略した。設定を変える必要が生じたら戻る。
+
+---
+
 ## ⚠️ コストの注意（必読）
 
 - **埋め込みファイルを丸ごとダウンロードしない。** 1 ファイル約 16GB。全体をダウンロードすると転送料金が数万円規模になりうる
